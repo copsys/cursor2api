@@ -413,12 +413,18 @@ export function isTruncated(text: string): boolean {
     // 代码块未闭合
     const codeBlockOpen = (trimmed.match(/```/g) || []).length % 2 !== 0;
     if (codeBlockOpen) return true;
+    // 检测 ```json action 块已开始但 JSON 对象未闭合（截断发生在工具调用参数中间）
+    const jsonActionBlocks = trimmed.match(/```json\s+action[\s\S]*?```/g) || [];
+    const jsonActionOpens = (trimmed.match(/```json\s+action/g) || []).length;
+    if (jsonActionOpens > jsonActionBlocks.length) return true;
     // XML/HTML 标签未闭合 (Cursor 有时在中途截断)
     const openTags = (trimmed.match(/^<[a-zA-Z]/gm) || []).length;
     const closeTags = (trimmed.match(/^<\/[a-zA-Z]/gm) || []).length;
     if (openTags > closeTags + 1) return true;
     // 以逗号、分号、冒号、开括号结尾（明显未完成）
     if (/[,;:\[{(]\s*$/.test(trimmed)) return true;
+    // 长响应以反斜杠 + n 结尾（JSON 字符串中间被截断）
+    if (trimmed.length > 2000 && /\\n?\s*$/.test(trimmed) && !trimmed.endsWith('```')) return true;
     // 短响应且以小写字母结尾（句子被截断的强烈信号）
     if (trimmed.length < 500 && /[a-z]$/.test(trimmed)) return false; // 短响应不判断
     return false;
@@ -556,21 +562,46 @@ async function handleStream(res: Response, cursorReq: CursorChatRequest, body: A
         // 流完成后，处理完整响应
         // ★ 内部截断续写：如果模型输出过长被截断（常见于写大文件），Proxy 内部分段续写，然后拼接成完整响应
         // 这样可以确保工具调用（如 Write）不会横跨两次 API 响应而退化为纯文本
-        const MAX_AUTO_CONTINUE = 4;
+        const MAX_AUTO_CONTINUE = 6;
         let continueCount = 0;
+        
+        // 保存原始请求的消息快照（不含续写追加的消息）
+        const originalMessages = [...activeCursorReq.messages];
         
         while (hasTools && isTruncated(fullResponse) && continueCount < MAX_AUTO_CONTINUE) {
             continueCount++;
+            const prevLength = fullResponse.length;
             console.log(`[Handler] ⚠️ 内部检测到截断 (${fullResponse.length} chars)，Proxy 将隐式请求无缝续写 (第${continueCount}次)...`);
             
-            // 构造续写请求：让 assistant 成为最后一条消息，模型会隐式无缝衔接
+            // 提取截断点的最后一段文本作为上下文锚点
+            const anchorLength = Math.min(300, fullResponse.length);
+            const anchorText = fullResponse.slice(-anchorLength);
+            
+            // 构造续写请求：原始消息 + 截断的 assistant 回复 + user 续写引导
+            // 每次重建而非累积，防止上下文膨胀
+            const continuationPrompt = `Your previous response was cut off mid-output. The last part of your output was:
+
+\`\`\`
+...${anchorText}
+\`\`\`
+
+Continue EXACTLY from where you stopped. DO NOT repeat any content already generated. DO NOT restart the response. Output ONLY the remaining content, starting immediately from the cut-off point.`;
+
             activeCursorReq = {
                 ...activeCursorReq,
-                messages: [...activeCursorReq.messages, {
-                    parts: [{ type: 'text', text: fullResponse }],
-                    id: uuidv4(),
-                    role: 'assistant',
-                }],
+                messages: [
+                    ...originalMessages,
+                    {
+                        parts: [{ type: 'text', text: fullResponse }],
+                        id: uuidv4(),
+                        role: 'assistant',
+                    },
+                    {
+                        parts: [{ type: 'text', text: continuationPrompt }],
+                        id: uuidv4(),
+                        role: 'user',
+                    },
+                ],
             };
             
             let continuationResponse = '';
@@ -579,7 +610,14 @@ async function handleStream(res: Response, cursorReq: CursorChatRequest, body: A
                     continuationResponse += event.delta;
                 }
             });
+
+            if (continuationResponse.trim().length === 0) {
+                console.log(`[Handler] ⚠️ 续写返回空响应，停止续写`);
+                break;
+            }
+
             fullResponse += continuationResponse;
+            console.log(`[Handler] 续写拼接完成: ${prevLength} → ${fullResponse.length} chars (+${continuationResponse.length})`);
         }
 
         let stopReason = (hasTools && isTruncated(fullResponse)) ? 'max_tokens' : 'end_turn';

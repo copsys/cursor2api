@@ -26,6 +26,42 @@ import { fixToolCallArguments } from './tool-fixer.js';
 // ==================== 工具指令构建 ====================
 
 /**
+ * 将 JSON Schema 压缩为紧凑的类型签名
+ * 目的：90 个工具的完整 JSON Schema 约 135,000 chars，压缩后约 15,000 chars
+ * 这直接影响 Cursor API 的输出预算（输入越大，输出越少）
+ *
+ * 示例：
+ *   完整: {"type":"object","properties":{"file_path":{"type":"string","description":"..."},"encoding":{"type":"string","enum":["utf-8","base64"]}},"required":["file_path"]}
+ *   压缩: {file_path!: string, encoding?: utf-8|base64}
+ */
+function compactSchema(schema: Record<string, unknown>): string {
+    if (!schema?.properties) return '{}';
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    const required = new Set((schema.required as string[]) || []);
+
+    const parts = Object.entries(props).map(([name, prop]) => {
+        let type = (prop.type as string) || 'any';
+        // enum 值直接展示（对正确生成参数至关重要）
+        if (prop.enum) {
+            type = (prop.enum as string[]).join('|');
+        }
+        // 数组类型标注 items 类型
+        if (type === 'array' && prop.items) {
+            const itemType = (prop.items as Record<string, unknown>).type || 'any';
+            type = `${itemType}[]`;
+        }
+        // 嵌套对象简写
+        if (type === 'object' && prop.properties) {
+            type = compactSchema(prop as Record<string, unknown>);
+        }
+        const req = required.has(name) ? '!' : '?';
+        return `${name}${req}: ${type}`;
+    });
+
+    return `{${parts.join(', ')}}`;
+}
+
+/**
  * 将工具定义构建为格式指令
  * 使用 Cursor IDE 原生场景融合：不覆盖模型身份，而是顺应它在 IDE 内的角色
  */
@@ -37,8 +73,11 @@ function buildToolInstructions(
     if (!tools || tools.length === 0) return '';
 
     const toolList = tools.map((tool) => {
-        const schema = tool.input_schema ? JSON.stringify(tool.input_schema) : '{}';
-        return `- **${tool.name}**: ${tool.description || 'No description'}\n  Schema: ${schema}`;
+        // ★ 使用紧凑 Schema 替代完整 JSON Schema 以大幅减小输入体积
+        const schema = tool.input_schema ? compactSchema(tool.input_schema) : '{}';
+        // 截断过长的工具描述（部分客户端的工具描述可达数千字符）
+        const desc = (tool.description || 'No description').substring(0, 200);
+        return `- **${tool.name}**: ${desc}\n  Params: ${schema}`;
     }).join('\n');
 
     // ★ tool_choice 强制约束
@@ -530,34 +569,105 @@ function tolerantParse(jsonStr: string): any {
     }
 }
 
+/**
+ * 从 ```json action 代码块中解析工具调用
+ *
+ * ★ 使用 JSON-string-aware 扫描器替代简单的正则匹配
+ * 原因：Write/Edit 工具的 content 参数经常包含 markdown 代码块（``` 标记），
+ * 简单的 lazy regex `/```json[\s\S]*?```/g` 会在 JSON 字符串内部的 ``` 处提前闭合，
+ * 导致工具参数被截断（例如一个 5000 字的文件只保留前几行）
+ */
 export function parseToolCalls(responseText: string): {
     toolCalls: ParsedToolCall[];
     cleanText: string;
 } {
     const toolCalls: ParsedToolCall[] = [];
-    let cleanText = responseText;
+    const blocksToRemove: Array<{ start: number; end: number }> = [];
 
-    const fullBlockRegex = /```json(?:\s+action)?\s*([\s\S]*?)\s*```/g;
+    // 查找所有 ```json (action)? 开头的位置
+    const openPattern = /```json(?:\s+action)?/g;
+    let openMatch: RegExpExecArray | null;
 
-    let match: RegExpExecArray | null;
-    while ((match = fullBlockRegex.exec(responseText)) !== null) {
-        let isToolCall = false;
-        try {
-            const parsed = tolerantParse(match[1]);
-            if (parsed.tool || parsed.name) {
-                const name = parsed.tool || parsed.name;
-                let args = parsed.parameters || parsed.arguments || parsed.input || {};
-                args = fixToolCallArguments(name, args);
-                toolCalls.push({ name, arguments: args });
-                isToolCall = true;
+    while ((openMatch = openPattern.exec(responseText)) !== null) {
+        const blockStart = openMatch.index;
+        const contentStart = blockStart + openMatch[0].length;
+
+        // 从内容起始处向前扫描，跳过 JSON 字符串内部的 ```
+        let pos = contentStart;
+        let inJsonString = false;
+        let escaped = false;
+        let closingPos = -1;
+
+        while (pos < responseText.length - 2) {
+            const char = responseText[pos];
+
+            if (escaped) {
+                escaped = false;
+                pos++;
+                continue;
             }
-        } catch (e) {
-            console.error('[Converter] tolerantParse 失败:', e);
+
+            if (char === '\\' && inJsonString) {
+                escaped = true;
+                pos++;
+                continue;
+            }
+
+            if (char === '"') {
+                inJsonString = !inJsonString;
+                pos++;
+                continue;
+            }
+
+            // 只在 JSON 字符串外部匹配闭合 ```
+            if (!inJsonString && responseText.substring(pos, pos + 3) === '```') {
+                closingPos = pos;
+                break;
+            }
+
+            pos++;
         }
 
-        if (isToolCall) {
-            cleanText = cleanText.replace(match[0], '');
+        if (closingPos >= 0) {
+            const jsonContent = responseText.substring(contentStart, closingPos).trim();
+            try {
+                const parsed = tolerantParse(jsonContent);
+                if (parsed.tool || parsed.name) {
+                    const name = parsed.tool || parsed.name;
+                    let args = parsed.parameters || parsed.arguments || parsed.input || {};
+                    args = fixToolCallArguments(name, args);
+                    toolCalls.push({ name, arguments: args });
+                    blocksToRemove.push({ start: blockStart, end: closingPos + 3 });
+                }
+            } catch (e) {
+                console.error('[Converter] tolerantParse 失败:', e);
+            }
+        } else {
+            // 没有闭合 ``` — 代码块被截断，尝试解析已有内容
+            const jsonContent = responseText.substring(contentStart).trim();
+            if (jsonContent.length > 10) {
+                try {
+                    const parsed = tolerantParse(jsonContent);
+                    if (parsed.tool || parsed.name) {
+                        const name = parsed.tool || parsed.name;
+                        let args = parsed.parameters || parsed.arguments || parsed.input || {};
+                        args = fixToolCallArguments(name, args);
+                        toolCalls.push({ name, arguments: args });
+                        blocksToRemove.push({ start: blockStart, end: responseText.length });
+                        console.log(`[Converter] ⚠️ 从截断的代码块中恢复工具调用: ${name}`);
+                    }
+                } catch {
+                    console.log(`[Converter] 截断的代码块无法解析为工具调用`);
+                }
+            }
         }
+    }
+
+    // 从后往前移除已解析的代码块，保留 cleanText
+    let cleanText = responseText;
+    for (let i = blocksToRemove.length - 1; i >= 0; i--) {
+        const block = blocksToRemove[i];
+        cleanText = cleanText.substring(0, block.start) + cleanText.substring(block.end);
     }
 
     return { toolCalls, cleanText: cleanText.trim() };
