@@ -80,6 +80,7 @@ cp config.yaml.example config.yaml
 | `logging.file_enabled` | 日志文件持久化 | `false` |
 | `logging.dir` | 日志存储目录 | `./logs` |
 | `logging.max_days` | 日志保留天数 | `7` |
+| `logging.persist_mode` | 日志落盘模式：`summary` 问答摘要 / `compact` 精简 / `full` 完整 | `summary` |
 | `max_auto_continue` | 截断自动续写次数 (`0`=禁用，交由客户端续写) | `0` |
 | `sanitize_response` | 响应内容清洗开关（替换 Cursor 身份引用为 Claude） | `false` |
 | `refusal_patterns` | 自定义拒绝检测规则列表（追加到内置规则） | 不配置 |
@@ -137,6 +138,8 @@ OPENAI_BASE_URL=http://localhost:3010/v1
 - **阶段耗时** - 可视化时间线展示各阶段耗时（receive → convert → send → response → complete）
 - **🌙 日/夜主题** - 一键切换明暗主题，自动记忆偏好
 - **日志持久化** - 配置 `logging.file_enabled: true` 后日志写入 JSONL 文件，重启自动加载
+- **摘要落盘（默认）** - `logging.persist_mode: summary` 仅保留“用户问题 + 模型回答”与少量元数据，体积最小
+- **精简落盘** - `logging.persist_mode: compact` 保留更多排障字段，同时压缩磁盘 JSONL
 
 ### 鉴权
 

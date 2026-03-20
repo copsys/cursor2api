@@ -74,10 +74,12 @@ function parseYamlConfig(defaults: AppConfig): { config: AppConfig; raw: Record<
         }
         // ★ 日志文件持久化
         if (yaml.logging !== undefined) {
+            const persistModes = ['compact', 'full', 'summary'];
             result.logging = {
                 file_enabled: yaml.logging.file_enabled === true, // 默认关闭
                 dir: yaml.logging.dir || './logs',
                 max_days: typeof yaml.logging.max_days === 'number' ? yaml.logging.max_days : 7,
+                persist_mode: persistModes.includes(yaml.logging.persist_mode) ? yaml.logging.persist_mode : 'summary',
             };
         }
         // ★ 工具处理配置
@@ -139,12 +141,20 @@ function applyEnvOverrides(cfg: AppConfig): void {
     }
     // Logging 环境变量覆盖
     if (process.env.LOG_FILE_ENABLED !== undefined) {
-        if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7 };
+        if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7, persist_mode: 'summary' };
         cfg.logging.file_enabled = process.env.LOG_FILE_ENABLED === 'true' || process.env.LOG_FILE_ENABLED === '1';
     }
     if (process.env.LOG_DIR) {
-        if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7 };
+        if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7, persist_mode: 'summary' };
         cfg.logging.dir = process.env.LOG_DIR;
+    }
+    if (process.env.LOG_PERSIST_MODE) {
+        if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7, persist_mode: 'summary' };
+        cfg.logging.persist_mode = process.env.LOG_PERSIST_MODE === 'full'
+            ? 'full'
+            : process.env.LOG_PERSIST_MODE === 'summary'
+                ? 'summary'
+                : 'compact';
     }
     // 工具透传模式环境变量覆盖
     if (process.env.TOOLS_PASSTHROUGH !== undefined) {

@@ -153,7 +153,9 @@ loadLogsFromFiles();
 
 app.listen(config.port, () => {
     const auth = config.authTokens?.length ? `${config.authTokens.length} token(s)` : 'open';
-    const logPersist = config.logging?.file_enabled ? `file → ${config.logging.dir}` : 'memory only';
+    const logPersist = config.logging?.file_enabled
+        ? `file(${config.logging.persist_mode || 'summary'}) → ${config.logging.dir}`
+        : 'memory only';
     
     // Tools 配置摘要
     const toolsCfg = config.tools;

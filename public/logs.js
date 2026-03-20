@@ -262,6 +262,10 @@ function renderPromptsTab(tc){
   }
   // ===== 原始请求 =====
   h+='<div class="content-section"><div class="cs-title">📥 客户端原始请求</div></div>';
+  if(curPayload.question){
+    h+='<div class="content-section"><div class="cs-title">❓ 用户问题摘要 <span class="cnt">'+fmtN(curPayload.question.length)+' chars</span></div>';
+    h+='<div class="resp-box" style="max-height:300px;overflow-y:auto;border-color:var(--orange)">'+escH(curPayload.question)+'<button class="copy-btn" onclick="copyText(curPayload.question)">复制</button></div></div>';
+  }
   if(curPayload.systemPrompt){
     h+='<div class="content-section"><div class="cs-title">🔒 原始 System Prompt <span class="cnt">'+fmtN(curPayload.systemPrompt.length)+' chars</span></div>';
     h+='<div class="resp-box" style="max-height:400px;overflow-y:auto;border-color:var(--orange)">'+escH(curPayload.systemPrompt)+'<button class="copy-btn" onclick="copyText(curPayload.systemPrompt)">复制</button></div></div>';
@@ -294,6 +298,15 @@ function renderPromptsTab(tc){
 function renderResponseTab(tc){
   if(!curPayload){tc.innerHTML='<div class="empty"><div class="ic">📤</div><p>暂无响应数据</p></div>';return}
   let h='';
+  if(curPayload.answer){
+    const title=curPayload.answerType==='tool_calls'?'✅ 最终结果（工具调用摘要）':'✅ 最终回答摘要';
+    h+='<div class="content-section"><div class="cs-title">'+title+' <span class="cnt">'+fmtN(curPayload.answer.length)+' chars</span></div>';
+    h+='<div class="resp-box diff" style="max-height:320px">'+escH(curPayload.answer)+'<button class="copy-btn" onclick="copyText(curPayload.answer)">复制</button></div></div>';
+  }
+  if(curPayload.toolCallNames&&curPayload.toolCallNames.length&&!curPayload.toolCalls){
+    h+='<div class="content-section"><div class="cs-title">🔧 工具调用名称 <span class="cnt">'+curPayload.toolCallNames.length+' 个</span></div>';
+    h+='<div class="resp-box">'+escH(curPayload.toolCallNames.join(', '))+'<button class="copy-btn" onclick="copyText(curPayload.toolCallNames.join(\', \'))">复制</button></div></div>';
+  }
   if(curPayload.thinkingContent){
     h+='<div class="content-section"><div class="cs-title">🧠 Thinking 内容 <span class="cnt">'+fmtN(curPayload.thinkingContent.length)+' chars</span></div>';
     h+='<div class="resp-box" style="border-color:var(--purple);max-height:300px">'+escH(curPayload.thinkingContent)+'<button class="copy-btn" onclick="copyText(curPayload.thinkingContent)">复制</button></div></div>';
