@@ -5,7 +5,7 @@ import { getConfig } from './config.js';
 
 /**
  * GET /api/config
- * 返回当前可热重载的配置字段（snake_case，过滤 port/proxy/auth_tokens/fingerprint/vision）
+ * Return hot-reloadable config fields (snake_case; excludes port/proxy/auth_tokens/fingerprint/vision)
  */
 export function apiGetConfig(_req: Request, res: Response): void {
     const cfg = getConfig();
@@ -36,12 +36,12 @@ export function apiGetConfig(_req: Request, res: Response): void {
 
 /**
  * POST /api/config
- * 接收可热重载字段，合并写入 config.yaml，热重载由 fs.watch 自动触发
+ * Accept hot-reloadable fields, merge into config.yaml; fs.watch triggers reload
  */
 export function apiSaveConfig(req: Request, res: Response): void {
     const body = req.body as Record<string, unknown>;
 
-    // 基本类型校验
+    // Basic type validation
     if (body.cursor_model !== undefined && typeof body.cursor_model !== 'string') {
         res.status(400).json({ error: 'cursor_model must be a string' }); return;
     }
@@ -59,16 +59,16 @@ export function apiSaveConfig(req: Request, res: Response): void {
     }
 
     try {
-        // 读取现有 yaml（如不存在则从空对象开始）
+        // Read existing yaml (start from empty object if missing)
         let raw: Record<string, unknown> = {};
         if (existsSync('config.yaml')) {
             raw = (parseYaml(readFileSync('config.yaml', 'utf-8')) as Record<string, unknown>) ?? {};
         }
 
-        // 记录变更
+        // Track changes
         const changes: string[] = [];
 
-        // 合并可热重载字段
+        // Merge hot-reloadable fields
         if (body.cursor_model !== undefined && body.cursor_model !== raw.cursor_model) {
             changes.push(`cursor_model: ${raw.cursor_model ?? '(unset)'} → ${body.cursor_model}`);
             raw.cursor_model = body.cursor_model;
@@ -93,9 +93,9 @@ export function apiSaveConfig(req: Request, res: Response): void {
             const t = body.thinking as { enabled: boolean | null } | null;
             const oldVal = JSON.stringify(raw.thinking);
             if (t === null || t?.enabled === null) {
-                // null = 跟随客户端：从 yaml 中删除 thinking 节
+                // null = follow client → remove thinking from yaml
                 if (raw.thinking !== undefined) {
-                    changes.push(`thinking: ${oldVal} → (跟随客户端)`);
+                    changes.push(`thinking: ${oldVal} → (follow client)`);
                     delete raw.thinking;
                 }
             } else {
@@ -148,15 +148,15 @@ export function apiSaveConfig(req: Request, res: Response): void {
             return;
         }
 
-        // 写入 config.yaml（热重载由 fs.watch 自动触发）
+        // Write config.yaml (fs.watch triggers hot reload)
         writeFileSync('config.yaml', stringifyYaml(raw, { lineWidth: 0 }), 'utf-8');
 
-        console.log(`[Config API] ✏️  通过 UI 更新配置，${changes.length} 项变更:`);
+        console.log(`[Config API] ✏️  Updated config via UI with ${changes.length} change(s):`);
         changes.forEach(c => console.log(`  └─ ${c}`));
 
         res.json({ ok: true, changes });
     } catch (e) {
-        console.error('[Config API] 写入 config.yaml 失败:', e);
+        console.error('[Config API] Failed to write config.yaml:', e);
         res.status(500).json({ error: String(e) });
     }
 }

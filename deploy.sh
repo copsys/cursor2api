@@ -1,67 +1,58 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
 
-echo "=========================================="
-echo "    Cursor2API Linux 一键部署服务包"
-echo "=========================================="
-echo "正在检测 Linux 环境并开始部署..."
+echo "    Cursor2API Linux one-click deployment"
+echo "Checking Linux environment and starting deployment..."
 
-# 1. 检查并安装 Node.js (v20)
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    echo "[环境检测] 未找到 Node.js，准备开始安装 (基于 NodeSource，适用于 Ubuntu/Debian/CentOS)..."
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "正在安装基础工具 curl..."
-        if command -v apt-get >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y curl
-        elif command -v yum >/dev/null 2>&1; then
-            sudo yum install -y curl
-        fi
+# 1. Check/install Node.js (v20)
+if ! command -v node &> /dev/null; then
+    echo "[Env] Node.js not found, installing via NodeSource (Ubuntu/Debian/CentOS)..."
+    if ! command -v curl &> /dev/null; then
+        echo "Installing curl..."
+        sudo apt-get update && sudo apt-get install -y curl
     fi
     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
-    if command -v apt-get >/dev/null 2>&1; then
-        sudo apt-get install -y nodejs
-    elif command -v yum >/dev/null 2>&1; then
-        sudo yum install -y nodejs
-    fi
-    echo "[环境检测] Node.js 安装完成: $(node -v) / npm: $(npm -v)"
+    sudo apt-get install -y nodejs
+    echo "[Env] Node.js installed: $(node -v) / npm: $(npm -v)"
 else
-    echo "[环境检测] Node.js 已安装: $(node -v) / npm: $(npm -v)"
+    echo "[Env] Node.js already installed: $(node -v) / npm: $(npm -v)"
 fi
 
-# 2. 检查并安装 PM2
-if ! command -v pm2 >/dev/null 2>&1; then
-    echo "[环境检测] 未找到 pm2，准备通过 npm 自动安装全局依赖..."
+# 2. Check/install PM2
+if ! command -v pm2 &> /dev/null; then
+    echo "[Env] pm2 not found, installing globally via npm..."
     sudo npm install -g pm2
-    echo "[环境检测] pm2 安装完成: $(pm2 -v)"
+    echo "[Env] pm2 installed: $(pm2 -v)"
 else
-    echo "[环境检测] pm2 已安装: $(pm2 -v)"
+    echo "[Env] pm2 already installed: $(pm2 -v)"
 fi
 
-# 3. 安装依赖与构建
-echo "[项目构建] 开始安装生产级项目依赖..."
-npm install
-
-echo "[项目构建] 正在编译 TypeScript 代码 (npm run build)..."
+# 3. Install deps and build
+echo "[Build] Installing production dependencies..."
+npm ci
+echo "[Build] Compiling TypeScript (npm run build)..."
 npm run build
 
-# 4. 配置 PM2 进程
-echo "[项目部署] 正在清理旧的 PM2 进程（如果有的话）..."
-pm2 delete cursor2api 2>/dev/null || true
+# 4. Configure PM2
+echo "[Deploy] Cleaning old PM2 process (if any)..."
+pm2 delete cursor2api || true
 
-# 5. 启动项目
-echo "[项目部署] 使用 PM2 守护进程启动服务..."
-# 设置生产环境变量
-NODE_ENV=production pm2 start dist/index.js --name "cursor2api" 
+# 5. Start service
+echo "[Deploy] Starting service with PM2..."
 
-# 6. 保存并且处理自启
-echo "[项目部署] 配置 PM2 保存以便意外重启后恢复..."
+# Set production env
+export NODE_ENV=production
+export PORT=${PORT:-3010}
+export TIMEOUT=${TIMEOUT:-120}
+
+pm2 start npm --name cursor2api -- start
+
+# 6. Save and enable startup
+echo "[Deploy] Saving PM2 process list for restarts..."
 pm2 save
+pm2 startup systemd -u $USER --hp $HOME
 
-echo "=========================================="
-echo "部署与运行全部完成！🚀"
-echo ""
-echo "常用 PM2 管理命令："
-echo "▶ 查看运行日志：  pm2 logs cursor2api"
-echo "▶ 查看进程监控：  pm2 monit"
-echo "▶ 重启服务：      pm2 restart cursor2api"
-echo "=========================================="
+echo "Deployment complete! 🚀"
+echo "PM2 quick commands:"
+echo "▶ Logs:            pm2 logs cursor2api"
+echo "▶ Monitor:         pm2 monit"
+echo "▶ Restart:         pm2 restart cursor2api"

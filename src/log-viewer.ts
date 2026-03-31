@@ -1,7 +1,7 @@
 /**
- * log-viewer.ts - 全链路日志 Web UI v4
- * 
- * 静态文件分离版：HTML/CSS/JS 放在 public/ 目录，此文件只包含 API 路由和文件服务
+ * log-viewer.ts - End-to-end log web UI v4
+ *
+ * Static assets live in public/, this file only serves APIs and files.
  */
 
 import type { Request, Response } from 'express';
@@ -10,7 +10,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { getAllLogs, getRequestSummaries, getStats, getVueStats, getRequestPayload, subscribeToLogs, subscribeToSummaries, clearAllLogs, getRequestSummariesPage } from './logger.js';
 
-// ==================== 静态文件路径 ====================
+// ==================== Static file paths ====================
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -20,7 +20,7 @@ function readPublicFile(filename: string): string {
     return readFileSync(join(publicDir, filename), 'utf-8');
 }
 
-// ==================== API 路由 ====================
+// ==================== API routes ====================
 
 export function apiGetLogs(req: Request, res: Response): void {
     const { requestId, level, source, limit, since } = req.query;
@@ -44,20 +44,20 @@ export function apiGetVueStats(req: Request, res: Response): void {
     res.json(getVueStats(since));
 }
 
-/** GET /api/payload/:requestId - 获取请求的完整参数和响应 */
+/** GET /api/payload/:requestId - fetch full request/response payload */
 export function apiGetPayload(req: Request, res: Response): void {
     const payload = getRequestPayload(req.params.requestId as string);
     if (!payload) { res.status(404).json({ error: 'Not found' }); return; }
     res.json(payload);
 }
 
-/** POST /api/logs/clear - 清空所有日志 */
+/** POST /api/logs/clear - clear all logs */
 export function apiClearLogs(_req: Request, res: Response): void {
     const result = clearAllLogs();
     res.json({ success: true, ...result });
 }
 
-/** GET /api/requests/more?limit=50&before=<ts>&status=error&keyword=foo&since=<ts> - 游标分页 + 后端过滤（仅 Vue UI 使用） */
+/** GET /api/requests/more?limit=50&before=<ts>&status=error&keyword=foo&since=<ts> - cursor pagination + server filtering (used by Vue UI) */
 export function apiGetRequestsMore(req: Request, res: Response): void {
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
     const before = req.query.before ? parseInt(req.query.before as string) : undefined;
@@ -82,7 +82,7 @@ export function apiLogsStream(req: Request, res: Response): void {
     req.on('close', () => { unsubLog(); unsubSummary(); clearInterval(hb); });
 }
 
-// ==================== 页面服务 ====================
+// ==================== Page serving ====================
 
 export function serveLogViewer(_req: Request, res: Response): void {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -98,7 +98,7 @@ export function serveVueApp(_req: Request, res: Response): void {
     res.sendFile(join(publicDir, 'vue', 'index.html'));
 }
 
-/** 静态文件路由 - CSS/JS */
+/** Static file route for CSS/JS */
 export function servePublicFile(req: Request, res: Response): void {
     const file = req.params[0]; // e.g. "logs.css" or "logs.js"
     const ext = file.split('.').pop();
