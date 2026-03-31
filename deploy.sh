@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 echo "    Cursor2API Linux one-click deployment"
 echo "Checking Linux environment and starting deployment..."
 
 # 1. Check/install Node.js (v20)
-if ! command -v node &> /dev/null; then
-    echo "[Env] Node.js not found, installing via NodeSource (Ubuntu/Debian/CentOS)..."
+if ! command -v node &> /dev/null || ! command -v npm &> /dev/null; then
+    echo "[Env] Node.js/npm not found, installing via NodeSource (Ubuntu/Debian)..."
     if ! command -v curl &> /dev/null; then
         echo "Installing curl..."
         sudo apt-get update && sudo apt-get install -y curl
     fi
     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
     sudo apt-get install -y nodejs
-    echo "[Env] Node.js installed: $(node -v) / npm: $(npm -v)"
+    echo "[Env] Node.js/npm installed: $(node -v) / npm: $(npm -v)"
 else
-    echo "[Env] Node.js already installed: $(node -v) / npm: $(npm -v)"
+    echo "[Env] Node.js/npm already installed: $(node -v) / npm: $(npm -v)"
 fi
 
 # 2. Check/install PM2

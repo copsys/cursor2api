@@ -43,8 +43,8 @@ max_history_tokens: 120000
 # -------------------- Thinking override --------------------
 # Follows client by default. Force on/off with:
 # ENV: THINKING_ENABLED=true|false
-thinking:
-  enabled: false
+# thinking:
+#   enabled: false
 
 # -------------------- Compression --------------------
 compression:

@@ -10,7 +10,7 @@ services:
       - "3010:3010"
     volumes:
       # Optional: mount your config (copy config.yaml.example -> config.yaml first)
-      # Changes take effect after `docker compose restart`. Without this mount, built-in defaults + env vars are used.
+      # Most config changes are hot-reloaded from config.yaml; restart is only needed for non-hot-reloadable fields (e.g. port) or env-var changes. Without this mount, built-in defaults + env vars are used.
       - ./config.yaml:/app/config.yaml
       # Persist logs (enable logging.file_enabled in config.yaml or env)
       - ./logs:/app/logs
@@ -39,7 +39,7 @@ services:
       # - MAX_HISTORY_MESSAGES=-1
       # - MAX_HISTORY_TOKENS=120000
 
-      # Logging persistence (restart required after changes)
+      # Logging persistence (generally hot-reloadable; restart only needed for env-var changes)
       # File (JSONL, small volumes):
       # - LOG_FILE_ENABLED=true
       # - LOG_DIR=./logs

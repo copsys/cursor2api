@@ -11,6 +11,8 @@ import { getConfig } from './config.js';
 
 let cachedAgent: ProxyAgent | undefined;
 let cachedVisionAgent: ProxyAgent | undefined;
+let cachedProxyUrl: string | undefined;
+let cachedVisionProxyUrl: string | undefined;
 
 /**
  * Get proxy dispatcher (if configured). Undefined = direct connection.
@@ -21,8 +23,9 @@ export function getProxyDispatcher(): ProxyAgent | undefined {
 
     if (!proxyUrl) return undefined;
 
-    if (!cachedAgent) {
+    if (!cachedAgent || cachedProxyUrl !== proxyUrl) {
         console.log(`[Proxy] Using global proxy: ${proxyUrl}`);
+        cachedProxyUrl = proxyUrl;
         cachedAgent = new ProxyAgent(proxyUrl);
     }
 
@@ -47,8 +50,9 @@ export function getVisionProxyFetchOptions(): Record<string, unknown> {
     const visionProxy = config.vision?.proxy;
 
     if (visionProxy) {
-        if (!cachedVisionAgent) {
+        if (!cachedVisionAgent || cachedVisionProxyUrl !== visionProxy) {
             console.log(`[Proxy] Vision proxy: ${visionProxy}`);
+            cachedVisionProxyUrl = visionProxy;
             cachedVisionAgent = new ProxyAgent(visionProxy);
         }
         return { dispatcher: cachedVisionAgent };
