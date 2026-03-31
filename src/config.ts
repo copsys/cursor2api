@@ -6,19 +6,19 @@ let config: AppConfig;
 let watcher: FSWatcher | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-// 配置变更回调
+// Config change callbacks
 type ConfigReloadCallback = (newConfig: AppConfig, changes: string[]) => void;
 const reloadCallbacks: ConfigReloadCallback[] = [];
 
 /**
- * 注册配置热重载回调
+ * Register a config hot-reload callback
  */
 export function onConfigReload(cb: ConfigReloadCallback): void {
     reloadCallbacks.push(cb);
 }
 
 /**
- * 从 config.yaml 解析配置（纯解析，不含环境变量覆盖）
+ * Parse config.yaml (raw parsing without env overrides)
  */
 function parseYamlConfig(defaults: AppConfig): { config: AppConfig; raw: Record<string, unknown> | null } {
     const result = { ...defaults, fingerprint: { ...defaults.fingerprint } };
@@ -51,33 +51,33 @@ function parseYamlConfig(defaults: AppConfig): { config: AppConfig; raw: Record<
                 proxy: yaml.vision.proxy || undefined,
             };
         }
-        // ★ API 鉴权 token
+        // API auth tokens
         if (yaml.auth_tokens) {
             result.authTokens = Array.isArray(yaml.auth_tokens)
                 ? yaml.auth_tokens.map(String)
                 : String(yaml.auth_tokens).split(',').map((s: string) => s.trim()).filter(Boolean);
         }
-        // ★ 历史压缩配置
+        // History compression
         if (yaml.compression !== undefined) {
             const c = yaml.compression;
             result.compression = {
-                enabled: c.enabled !== false, // 默认启用
+                enabled: c.enabled !== false, // default on
                 level: [1, 2, 3].includes(c.level) ? c.level : 1,
                 keepRecent: typeof c.keep_recent === 'number' ? c.keep_recent : 10,
                 earlyMsgMaxChars: typeof c.early_msg_max_chars === 'number' ? c.early_msg_max_chars : 4000,
             };
         }
-        // ★ Thinking 开关（最高优先级）
+        // Thinking toggle (highest priority)
         if (yaml.thinking !== undefined) {
             result.thinking = {
-                enabled: yaml.thinking.enabled !== false, // 默认启用
+                enabled: yaml.thinking.enabled !== false, // default on
             };
         }
-        // ★ 日志文件持久化
+        // Log persistence
         if (yaml.logging !== undefined) {
             const persistModes = ['compact', 'full', 'summary'];
             result.logging = {
-                file_enabled: yaml.logging.file_enabled === true, // 默认关闭
+                file_enabled: yaml.logging.file_enabled === true, // default off
                 dir: yaml.logging.dir || './logs',
                 max_days: typeof yaml.logging.max_days === 'number' ? yaml.logging.max_days : 7,
                 persist_mode: persistModes.includes(yaml.logging.persist_mode) ? yaml.logging.persist_mode : 'summary',
@@ -85,7 +85,7 @@ function parseYamlConfig(defaults: AppConfig): { config: AppConfig; raw: Record<
                 db_path: yaml.logging.db_path || './logs/cursor2api.db',
             };
         }
-        // ★ 工具处理配置
+        // Tool handling configuration
         if (yaml.tools !== undefined) {
             const t = yaml.tools;
             const validModes = ['compact', 'full', 'names_only'];
@@ -96,31 +96,31 @@ function parseYamlConfig(defaults: AppConfig): { config: AppConfig; raw: Record<
                 exclude: Array.isArray(t.exclude) ? t.exclude.map(String) : undefined,
                 passthrough: t.passthrough === true,
                 disabled: t.disabled === true,
-                adaptiveBudget: t.adaptive_budget === true,    // 默认关闭
-                smartTruncation: t.smart_truncation === true,   // 默认关闭
+                adaptiveBudget: t.adaptive_budget === true,    // default off
+                smartTruncation: t.smart_truncation === true,   // default off
             };
         }
-        // ★ 响应内容清洗开关（默认关闭）
+        // Response sanitization toggle (default off)
         if (yaml.sanitize_response !== undefined) {
             result.sanitizeEnabled = yaml.sanitize_response === true;
         }
-        // ★ 自定义拒绝检测规则
+        // Custom refusal patterns
         if (Array.isArray(yaml.refusal_patterns)) {
             result.refusalPatterns = yaml.refusal_patterns.map(String).filter(Boolean);
         }
-        // ★ 上下文压力膨胀系数
+        // Context pressure inflation factor
         if (typeof yaml.context_pressure === 'number') {
             result.contextPressure = yaml.context_pressure;
         }
     } catch (e) {
-        console.warn('[Config] 读取 config.yaml 失败:', e);
+        console.warn('[Config] Failed to read config.yaml:', e);
     }
 
     return { config: result, raw };
 }
 
 /**
- * 应用环境变量覆盖（环境变量优先级最高，不受热重载影响）
+ * Apply environment-variable overrides (highest priority, not affected by hot reload)
  */
 function applyEnvOverrides(cfg: AppConfig): void {
     if (process.env.PORT) cfg.port = parseInt(process.env.PORT);
@@ -133,7 +133,7 @@ function applyEnvOverrides(cfg: AppConfig): void {
     if (process.env.AUTH_TOKEN) {
         cfg.authTokens = process.env.AUTH_TOKEN.split(',').map(s => s.trim()).filter(Boolean);
     }
-    // 压缩环境变量覆盖
+    // Compression overrides
     if (process.env.COMPRESSION_ENABLED !== undefined) {
         if (!cfg.compression) cfg.compression = { enabled: false, level: 1, keepRecent: 10, earlyMsgMaxChars: 4000 };
         cfg.compression.enabled = process.env.COMPRESSION_ENABLED !== 'false' && process.env.COMPRESSION_ENABLED !== '0';
@@ -143,13 +143,13 @@ function applyEnvOverrides(cfg: AppConfig): void {
         const lvl = parseInt(process.env.COMPRESSION_LEVEL);
         if (lvl >= 1 && lvl <= 3) cfg.compression.level = lvl as 1 | 2 | 3;
     }
-    // Thinking 环境变量覆盖（最高优先级）
+    // Thinking overrides (highest priority)
     if (process.env.THINKING_ENABLED !== undefined) {
         cfg.thinking = {
             enabled: process.env.THINKING_ENABLED !== 'false' && process.env.THINKING_ENABLED !== '0',
         };
     }
-    // Logging 环境变量覆盖
+    // Logging overrides
     if (process.env.LOG_FILE_ENABLED !== undefined) {
         if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7, persist_mode: 'summary', db_enabled: false, db_path: './logs/cursor2api.db' };
         cfg.logging.file_enabled = process.env.LOG_FILE_ENABLED === 'true' || process.env.LOG_FILE_ENABLED === '1';
@@ -174,49 +174,49 @@ function applyEnvOverrides(cfg: AppConfig): void {
         if (!cfg.logging) cfg.logging = { file_enabled: false, dir: './logs', max_days: 7, persist_mode: 'summary', db_enabled: false, db_path: './logs/cursor2api.db' };
         cfg.logging.db_path = process.env.LOG_DB_PATH;
     }
-    // 工具透传模式环境变量覆盖
+    // Tool passthrough env override
     if (process.env.TOOLS_PASSTHROUGH !== undefined) {
         if (!cfg.tools) cfg.tools = { schemaMode: 'full', descriptionMaxLength: 0 };
         cfg.tools.passthrough = process.env.TOOLS_PASSTHROUGH === 'true' || process.env.TOOLS_PASSTHROUGH === '1';
     }
-    // 工具禁用模式环境变量覆盖
+    // Tool disable env override
     if (process.env.TOOLS_DISABLED !== undefined) {
         if (!cfg.tools) cfg.tools = { schemaMode: 'full', descriptionMaxLength: 0 };
         cfg.tools.disabled = process.env.TOOLS_DISABLED === 'true' || process.env.TOOLS_DISABLED === '1';
     }
-    // 自适应历史预算环境变量覆盖
+    // Adaptive history budget env override
     if (process.env.TOOLS_ADAPTIVE_BUDGET !== undefined) {
         if (!cfg.tools) cfg.tools = { schemaMode: 'full', descriptionMaxLength: 0 };
         cfg.tools.adaptiveBudget = process.env.TOOLS_ADAPTIVE_BUDGET !== 'false' && process.env.TOOLS_ADAPTIVE_BUDGET !== '0';
     }
-    // 智能截断环境变量覆盖
+    // Smart truncation env override
     if (process.env.TOOLS_SMART_TRUNCATION !== undefined) {
         if (!cfg.tools) cfg.tools = { schemaMode: 'full', descriptionMaxLength: 0 };
         cfg.tools.smartTruncation = process.env.TOOLS_SMART_TRUNCATION !== 'false' && process.env.TOOLS_SMART_TRUNCATION !== '0';
     }
 
-    // 响应内容清洗环境变量覆盖
+    // Response sanitization env override
     if (process.env.SANITIZE_RESPONSE !== undefined) {
         cfg.sanitizeEnabled = process.env.SANITIZE_RESPONSE === 'true' || process.env.SANITIZE_RESPONSE === '1';
     }
-    // 上下文压力膨胀系数环境变量覆盖
+    // Context pressure inflation override
     if (process.env.CONTEXT_PRESSURE !== undefined) {
         cfg.contextPressure = parseFloat(process.env.CONTEXT_PRESSURE);
     }
 
-    // 从 base64 FP 环境变量解析指纹
+    // Parse fingerprint from base64 FP env var
     if (process.env.FP) {
         try {
             const fp = JSON.parse(Buffer.from(process.env.FP, 'base64').toString());
             if (fp.userAgent) cfg.fingerprint.userAgent = fp.userAgent;
         } catch (e) {
-            console.warn('[Config] 解析 FP 环境变量失败:', e);
+            console.warn('[Config] Failed to parse FP environment variable:', e);
         }
     }
 }
 
 /**
- * 构建默认配置
+ * Build default configuration
  */
 function defaultConfig(): AppConfig {
     return {
@@ -226,7 +226,7 @@ function defaultConfig(): AppConfig {
         maxAutoContinue: 0,
         maxHistoryMessages: -1,
         maxHistoryTokens: 150000,
-        sanitizeEnabled: false,  // 默认关闭响应内容清洗
+        sanitizeEnabled: false,  // response sanitization off by default
         fingerprint: {
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
         },
@@ -234,7 +234,7 @@ function defaultConfig(): AppConfig {
 }
 
 /**
- * 检测配置变更并返回变更描述列表
+ * Detect configuration changes and return descriptions
  */
 function detectChanges(oldCfg: AppConfig, newCfg: AppConfig): string[] {
     const changes: string[] = [];
@@ -280,12 +280,12 @@ function detectChanges(oldCfg: AppConfig, newCfg: AppConfig): string[] {
 }
 
 /**
- * 获取当前配置（所有模块统一通过此函数获取最新配置）
+ * Get the current configuration (single source for all modules)
  */
 export function getConfig(): AppConfig {
     if (config) return config;
 
-    // 首次加载
+    // First load
     const defaults = defaultConfig();
     const { config: parsed } = parseYamlConfig(defaults);
     applyEnvOverrides(parsed);
@@ -294,15 +294,15 @@ export function getConfig(): AppConfig {
 }
 
 /**
- * 初始化 config.yaml 文件监听，实现热重载
+ * Initialize config.yaml watcher for hot reload.
  *
- * 端口变更仅记录警告（需重启生效），其他字段下一次请求即生效。
- * 环境变量覆盖始终保持最高优先级，不受热重载影响。
+ * Port changes are only warned (require restart); other fields apply on next request.
+ * Env overrides always take precedence and are not affected by hot reload.
  */
 export function initConfigWatcher(): void {
-    if (watcher) return; // 避免重复初始化
+    if (watcher) return; // avoid duplicate watchers
     if (!existsSync('config.yaml')) {
-        console.log('[Config] config.yaml 不存在，跳过热重载监听');
+        console.log('[Config] config.yaml not found; skip hot-reload watcher');
         return;
     }
 
@@ -311,69 +311,69 @@ export function initConfigWatcher(): void {
     watcher = watch('config.yaml', (eventType) => {
         if (eventType !== 'change') return;
 
-        // 防抖：多次快速写入只触发一次重载
+        // Debounce multiple quick writes into a single reload
         if (debounceTimer) clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
             try {
                 if (!existsSync('config.yaml')) {
-                    console.warn('[Config] ⚠️  config.yaml 已被删除，保持当前配置');
+                    console.warn('[Config] ⚠️  config.yaml was removed; keeping current config');
                     return;
                 }
 
                 const oldConfig = config;
                 const oldPort = oldConfig.port;
 
-                // 重新解析 YAML + 环境变量覆盖
+                // Re-parse YAML + env overrides
                 const defaults = defaultConfig();
                 const { config: newConfig } = parseYamlConfig(defaults);
                 applyEnvOverrides(newConfig);
 
-                // 检测变更
+                // Detect changes
                 const changes = detectChanges(oldConfig, newConfig);
-                if (changes.length === 0) return; // 无实质变更
+                if (changes.length === 0) return; // no-op
 
-                // ★ 端口变更特殊处理：仅警告，不生效
+                // Port changes: warn only, do not apply without restart
                 if (newConfig.port !== oldPort) {
-                    console.warn(`[Config] ⚠️  检测到 port 变更 (${oldPort} → ${newConfig.port})，端口变更需要重启服务才能生效`);
-                    newConfig.port = oldPort; // 保持原端口
+                    console.warn(`[Config] ⚠️  Detected port change (${oldPort} → ${newConfig.port}); restart required to apply`);
+                    newConfig.port = oldPort; // keep existing port
                 }
 
-                // 替换全局配置对象（下一次 getConfig() 调用即返回新配置）
+                // Replace global config (next getConfig() call returns the new one)
                 config = newConfig;
 
-                console.log(`[Config] 🔄 config.yaml 已热重载，${changes.length} 项变更:`);
+                console.log(`[Config] 🔄 config.yaml hot-reloaded with ${changes.length} change(s):`);
                 changes.forEach(c => console.log(`  └─ ${c}`));
 
-                // 触发回调
+                // Trigger callbacks
                 for (const cb of reloadCallbacks) {
                     try {
                         cb(newConfig, changes);
                     } catch (e) {
-                        console.warn('[Config] 热重载回调执行失败:', e);
+                        console.warn('[Config] Hot-reload callback failed:', e);
                     }
                 }
             } catch (e) {
-                console.error('[Config] ❌ 热重载失败，保持当前配置:', e);
+                console.error('[Config] ❌ Hot reload failed; keeping current config:', e);
             }
         }, DEBOUNCE_MS);
     });
 
-    // 异常处理：watcher 挂掉后尝试重建
+    // Error handling: try to recreate watcher on failure
     watcher.on('error', (err) => {
-        console.error('[Config] ❌ 文件监听异常:', err);
+        console.error('[Config] ❌ File watch error:', err);
         watcher = null;
-        // 2 秒后尝试重新建立监听
+        // Retry after 2 seconds
         setTimeout(() => {
-            console.log('[Config] 🔄 尝试重新建立 config.yaml 监听...');
+            console.log('[Config] 🔄 Attempting to re-establish config.yaml watcher...');
             initConfigWatcher();
         }, 2000);
     });
 
-    console.log('[Config] 👁️  正在监听 config.yaml 变更（热重载已启用）');
+    console.log('[Config] 👁️  Watching config.yaml for changes (hot reload enabled)');
 }
 
 /**
- * 停止文件监听（用于优雅关闭）
+ * Stop file watcher (for graceful shutdown)
  */
 export function stopConfigWatcher(): void {
     if (debounceTimer) {

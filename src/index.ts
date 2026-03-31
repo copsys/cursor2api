@@ -1,8 +1,8 @@
 /**
- * Cursor2API v2 - 入口
+ * Cursor2API v2 - Entry point
  *
- * 将 Cursor 文档页免费 AI 接口代理为 Anthropic Messages API
- * 通过提示词注入让 Claude Code 拥有完整工具调用能力
+ * Proxies the free Cursor Docs AI endpoint into the Anthropic Messages API
+ * and injects prompts so Claude Code gains full tool-calling capabilities.
  */
 
 import 'dotenv/config';
@@ -16,7 +16,7 @@ import { apiGetConfig, apiSaveConfig } from './config-api.js';
 import { loadLogsFromFiles } from './logger.js';
 import { initDb } from './logger-db.js';
 
-// 从 package.json 读取版本号，统一来源，避免多处硬编码
+// Read version from package.json to keep a single source of truth
 const require = createRequire(import.meta.url);
 const { version: VERSION } = require('../package.json') as { version: string };
 
@@ -24,7 +24,7 @@ const { version: VERSION } = require('../package.json') as { version: string };
 const app = express();
 const config = getConfig();
 
-// 解析 JSON body（增大限制以支持 base64 图片，单张图片可达 10MB+）
+// Parse JSON body with a higher limit to support large base64 images (10MB+ per image)
 app.use(express.json({ limit: '50mb' }));
 
 // CORS
@@ -39,22 +39,22 @@ app.use((_req, res, next) => {
     next();
 });
 
-// ★ 静态文件路由（无需鉴权，CSS/JS 等）
+// Static assets (no auth required for CSS/JS/etc.)
 app.use('/public', express.static('public'));
 
-// ★ 日志查看器鉴权中间件：配置了 authTokens 时需要验证
+// Log viewer auth: require token when authTokens is configured
 const logViewerAuth = (req: express.Request, res: express.Response, next: express.NextFunction) => {
     const tokens = getConfig().authTokens;
-    if (!tokens || tokens.length === 0) return next(); // 未配置 token 则放行
+    if (!tokens || tokens.length === 0) return next(); // no token configured → allow
 
-    // 支持多种传入方式: query ?token=xxx, Authorization header, x-api-key header
+    // Accept ?token=xxx, Authorization header, or x-api-key header
     const tokenFromQuery = req.query.token as string | undefined;
     const authHeader = req.headers['authorization'] || req.headers['x-api-key'];
     const tokenFromHeader = authHeader ? String(authHeader).replace(/^Bearer\s+/i, '').trim() : undefined;
     const token = tokenFromQuery || tokenFromHeader;
 
     if (!token || !tokens.includes(token)) {
-        // HTML 页面请求 → 返回登录页; API 请求 → 返回 JSON 错误
+        // HTML page → login; API → JSON error
         if (req.path === '/logs') {
             return serveLogViewerLogin(req, res);
         }
@@ -64,9 +64,9 @@ const logViewerAuth = (req: express.Request, res: express.Response, next: expres
     next();
 };
 
-// ★ 日志查看器路由（带鉴权）
+// Log viewer routes (auth-protected)
 app.get('/logs', logViewerAuth, serveLogViewer);
-// Vue3 日志 UI（无服务端鉴权，由 Vue 应用内部处理）
+// Vue3 log UI (auth handled inside the Vue app)
 app.get('/vuelogs', serveVueApp);
 app.get('/api/logs', logViewerAuth, apiGetLogs);
 app.get('/api/requests/more', logViewerAuth, apiGetRequestsMore);
@@ -79,15 +79,15 @@ app.post('/api/logs/clear', logViewerAuth, apiClearLogs);
 app.get('/api/config', logViewerAuth, apiGetConfig);
 app.post('/api/config', logViewerAuth, apiSaveConfig);
 
-// ★ API 鉴权中间件：配置了 authTokens 则需要 Bearer token
+// API auth middleware: require Bearer token when authTokens is configured
 app.use((req, res, next) => {
-    // 跳过无需鉴权的路径
+    // Allow unauthenticated GET and /health
     if (req.method === 'GET' || req.path === '/health') {
         return next();
     }
     const tokens = getConfig().authTokens;
     if (!tokens || tokens.length === 0) {
-        return next(); // 未配置 token 则全部放行
+        return next(); // open access when no tokens
     }
     const authHeader = req.headers['authorization'] || req.headers['x-api-key'];
     if (!authHeader) {
@@ -96,40 +96,40 @@ app.use((req, res, next) => {
     }
     const token = String(authHeader).replace(/^Bearer\s+/i, '').trim();
     if (!tokens.includes(token)) {
-        console.log(`[Auth] 拒绝无效 token: ${token.substring(0, 8)}...`);
+        console.log(`[Auth] Reject invalid token: ${token.substring(0, 8)}...`);
         res.status(403).json({ error: { message: 'Invalid authentication token', type: 'auth_error' } });
         return;
     }
     next();
 });
 
-// ==================== 路由 ====================
+// ==================== Routes ====================
 
 // Anthropic Messages API
 app.post('/v1/messages', handleMessages);
 app.post('/messages', handleMessages);
 
-// OpenAI Chat Completions API（兼容）
+// OpenAI Chat Completions API (compatible)
 app.post('/v1/chat/completions', handleOpenAIChatCompletions);
 app.post('/chat/completions', handleOpenAIChatCompletions);
 
-// OpenAI Responses API（Cursor IDE Agent 模式）
+// OpenAI Responses API (Cursor IDE Agent mode)
 app.post('/v1/responses', handleOpenAIResponses);
 app.post('/responses', handleOpenAIResponses);
 
-// Token 计数
+// Token counting
 app.post('/v1/messages/count_tokens', countTokens);
 app.post('/messages/count_tokens', countTokens);
 
-// OpenAI 兼容模型列表
+// OpenAI-compatible model list
 app.get('/v1/models', listModels);
 
-// 健康检查
+// Health check
 app.get('/health', (_req, res) => {
     res.json({ status: 'ok', version: VERSION });
 });
 
-// 根路径
+// Root endpoint
 app.get('/', (_req, res) => {
     res.json({
         name: 'cursor2api',
@@ -147,19 +147,19 @@ app.get('/', (_req, res) => {
         usage: {
             claude_code: 'export ANTHROPIC_BASE_URL=http://localhost:' + config.port,
             openai_compatible: 'OPENAI_BASE_URL=http://localhost:' + config.port + '/v1',
-            cursor_ide: 'OPENAI_BASE_URL=http://localhost:' + config.port + '/v1 (选用 Claude 模型)',
+            cursor_ide: 'OPENAI_BASE_URL=http://localhost:' + config.port + '/v1 (use Claude models)',
         },
     });
 });
 
-// ==================== 启动 ====================
+// ==================== Startup ====================
 
-// ★ 初始化 SQLite（若启用）
+// Initialize SQLite when enabled
 if (config.logging?.db_enabled) {
     initDb(config.logging.db_path || './logs/cursor2api.db');
 }
 
-// ★ 从日志文件加载历史（必须在 listen 之前）
+// Load historical logs from files before listen
 loadLogsFromFiles();
 
 app.listen(config.port, () => {
@@ -169,14 +169,14 @@ app.listen(config.port, () => {
     if (config.logging?.db_enabled) logParts.push(`sqlite → ${config.logging.db_path || './logs/cursor2api.db'}`);
     const logPersist = logParts.length > 0 ? logParts.join(' + ') : 'memory only';
     
-    // Tools 配置摘要
+    // Tools configuration summary
     const toolsCfg = config.tools;
     let toolsInfo = 'default (full, desc=full)';
     if (toolsCfg) {
         if (toolsCfg.disabled) {
-            toolsInfo = '\x1b[33mdisabled\x1b[0m (不注入工具定义，节省上下文)';
+            toolsInfo = '\x1b[33mdisabled\x1b[0m (skip tool definitions to save context)';
         } else if (toolsCfg.passthrough) {
-            toolsInfo = '\x1b[36mpassthrough\x1b[0m (原始 JSON 嵌入)';
+            toolsInfo = '\x1b[36mpassthrough\x1b[0m (embed raw JSON)';
         } else {
             const parts: string[] = [];
             parts.push(`schema=${toolsCfg.schemaMode}`);
@@ -198,11 +198,11 @@ app.listen(config.port, () => {
     console.log(`  └─ Logs Vue3: \x1b[35mhttp://localhost:${config.port}/vuelogs\x1b[0m`);
     console.log('');
 
-    // ★ 启动 config.yaml 热重载监听
+    // Start config.yaml hot-reload watcher
     initConfigWatcher();
 });
 
-// ★ 优雅关闭：停止文件监听
+// Graceful shutdown: stop file watcher
 process.on('SIGTERM', () => {
     stopConfigWatcher();
     process.exit(0);

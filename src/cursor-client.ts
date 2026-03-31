@@ -1,12 +1,12 @@
 /**
- * cursor-client.ts - Cursor API 客户端
+ * cursor-client.ts - Cursor API client
  *
- * 职责：
- * 1. 发送请求到 https://cursor.com/api/chat（带 Chrome TLS 指纹模拟 headers）
- * 2. 流式解析 SSE 响应
- * 3. 自动重试（最多 2 次）
+ * Responsibilities:
+ * 1. Send requests to https://cursor.com/api/chat (with Chrome-like TLS headers)
+ * 2. Stream-parse SSE responses
+ * 3. Auto-retry (up to 2 times)
  *
- * 注：x-is-human token 验证已被 Cursor 停用，直接发送空字符串即可。
+ * Note: Cursor no longer validates the x-is-human token, so an empty string is fine.
  */
 
 import type { CursorChatRequest, CursorSSEEvent } from './types.js';
@@ -15,7 +15,7 @@ import { getProxyFetchOptions } from './proxy-agent.js';
 
 const CURSOR_CHAT_API = 'https://cursor.com/api/chat';
 
-// Chrome 浏览器请求头模拟
+// Mimic Chrome request headers
 function getChromeHeaders(): Record<string, string> {
     const config = getConfig();
     return {
@@ -33,18 +33,16 @@ function getChromeHeaders(): Record<string, string> {
         'sec-fetch-mode': 'cors',
         'sec-fetch-dest': 'empty',
         'referer': 'https://cursor.com/',
-        'accept-language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        'accept-language': 'en-US,en;q=0.9',
         'priority': 'u=1, i',
         'user-agent': config.fingerprint.userAgent,
-        'x-is-human': '',  // Cursor 不再校验此字段
+        'x-is-human': '',  // Cursor no longer validates this field
     };
 }
 
-// ==================== API 请求 ====================
+// ==================== API requests ====================
 
-/**
- * 发送请求到 Cursor /api/chat 并以流式方式处理响应（带重试）
- */
+/** Send a request to Cursor /api/chat and stream the response (with retries) */
 export async function sendCursorRequest(
     req: CursorChatRequest,
     onChunk: (event: CursorSSEEvent) => void,
@@ -56,12 +54,12 @@ export async function sendCursorRequest(
             await sendCursorRequestInner(req, onChunk, externalSignal);
             return;
         } catch (err) {
-            // 外部主动中止不重试
+            // Do not retry if the caller aborted
             if (externalSignal?.aborted) throw err;
-            // ★ 退化循环中止不重试 — 已有的内容是有效的，重试也会重蹈覆辙
+            // Degenerate-loop abort should not be retried; existing content is valid
             if (err instanceof Error && err.message === 'DEGENERATE_LOOP_ABORTED') return;
             const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[Cursor] 请求失败 (${attempt}/${maxRetries}): ${msg.substring(0, 100)}`);
+            console.error(`[Cursor] Request failed (${attempt}/${maxRetries}): ${msg.substring(0, 100)}`);
             if (attempt < maxRetries) {
                 await new Promise(r => setTimeout(r, 2000));
             } else {
@@ -78,31 +76,30 @@ async function sendCursorRequestInner(
 ): Promise<void> {
     const headers = getChromeHeaders();
 
-    // 详细日志记录在 handler 层
+    // Detailed logging happens in handler.ts
 
     const config = getConfig();
     const controller = new AbortController();
-    // 链接外部信号：外部中止时同步中止内部 controller
+    // Connect external abort signal to the internal controller
     if (externalSignal) {
         if (externalSignal.aborted) { controller.abort(); }
         else { externalSignal.addEventListener('abort', () => controller.abort(), { once: true }); }
     }
 
-    // ★ 空闲超时（Idle Timeout）：用读取活动检测替换固定总时长超时。
-    // 每次收到新数据时重置计时器，只有在指定时间内完全无数据到达时才中断。
-    // 这样长输出（如写长文章、大量工具调用）不会因总时长超限被误杀。
-    const IDLE_TIMEOUT_MS = config.timeout * 1000; // 复用 timeout 配置作为空闲超时阈值
+    // Idle timeout: reset whenever data arrives; abort only when no data within the configured window.
+    // Prevents long outputs (long articles, many tool calls) from being killed by a fixed wall-clock timeout.
+    const IDLE_TIMEOUT_MS = config.timeout * 1000; // reuse timeout as idle window
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
     const resetIdleTimer = () => {
         if (idleTimer) clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-            console.warn(`[Cursor] 空闲超时（${config.timeout}s 无新数据），中止请求`);
+            console.warn(`[Cursor] Idle timeout (${config.timeout}s without data); aborting request`);
             controller.abort();
         }, IDLE_TIMEOUT_MS);
     };
 
-    // 启动初始计时（等待服务器开始响应）
+    // Start initial timer while waiting for the first bytes
     resetIdleTimer();
 
     try {
@@ -116,28 +113,26 @@ async function sendCursorRequestInner(
 
         if (!resp.ok) {
             const body = await resp.text();
-            throw new Error(`Cursor API 错误: HTTP ${resp.status} - ${body}`);
+            throw new Error(`Cursor API error: HTTP ${resp.status} - ${body}`);
         }
 
         if (!resp.body) {
-            throw new Error('Cursor API 响应无 body');
+            throw new Error('Cursor API response has no body');
         }
 
-        // 流式读取 SSE 响应
+        // Stream-read SSE response
         const reader = resp.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
 
-        // ★ 退化重复检测器 (#66)
-        // 模型有时会陷入循环，不断输出 </s>、</br> 等无意义标记
-        // 检测原理：跟踪最近的连续相同 delta，超过阈值则中止流
+        // Degenerate repetition detector (#66)
+        // The model can loop on tokens like </s> or </br>; track repeated deltas and abort past a threshold.
         let lastDelta = '';
         let repeatCount = 0;
-        const REPEAT_THRESHOLD = 8;       // 同一 delta 连续出现 8 次 → 退化
+        const REPEAT_THRESHOLD = 8;       // Same delta 8 times in a row → degenerate
         let degenerateAborted = false;
 
-        // ★ HTML token 重复检测：历史消息较多时模型偶发连续输出 <br>、</s> 等 HTML token 的 bug
-        // 用 tagBuffer 跨 delta 拼接，提取完整 token 后检测连续重复，不依赖换行
+        // HTML token repetition: long histories can trigger repeated <br> or </s>; detect across deltas.
         let tagBuffer = '';
         let htmlRepeatAborted = false;
         const HTML_TOKEN_RE = /(<\/?[a-z][a-z0-9]*\s*\/?>|&[a-z]+;)/gi;
@@ -146,7 +141,7 @@ async function sendCursorRequestInner(
             const { done, value } = await reader.read();
             if (done) break;
 
-            // 每次收到数据就重置空闲计时器
+            // Reset idle timer on every chunk
             resetIdleTimer();
 
             buffer += decoder.decode(value, { stream: true });
@@ -161,15 +156,15 @@ async function sendCursorRequestInner(
                 try {
                     const event: CursorSSEEvent = JSON.parse(data);
 
-                    // ★ 退化重复检测：当模型重复输出同一短文本片段时中止
+                    // Degenerate repeat detection: abort when the same short snippet repeats
                     if (event.type === 'text-delta' && event.delta) {
                         const trimmedDelta = event.delta.trim();
-                        // 只检测短 token（长文本重复是正常的，比如重复的代码行）
+                        // Only check short tokens; longer repeats can be valid (e.g., repeated code lines)
                         if (trimmedDelta.length > 0 && trimmedDelta.length <= 20) {
                             if (trimmedDelta === lastDelta) {
                                 repeatCount++;
                                 if (repeatCount >= REPEAT_THRESHOLD) {
-                                    console.warn(`[Cursor] ⚠️ 检测到退化循环: "${trimmedDelta}" 已连续重复 ${repeatCount} 次，中止流`);
+                                    console.warn(`[Cursor] ⚠️ Detected degenerate loop: "${trimmedDelta}" repeated ${repeatCount} times, aborting stream`);
                                     degenerateAborted = true;
                                     reader.cancel();
                                     break;
@@ -179,13 +174,13 @@ async function sendCursorRequestInner(
                                 repeatCount = 1;
                             }
                         } else {
-                            // 长文本或空白 → 重置计数
+                            // Long text or whitespace → reset counters
                             lastDelta = '';
                             repeatCount = 0;
                         }
 
-                        // ★ HTML token 重复检测：跨 delta 拼接，提取完整 HTML token 后检测连续重复
-                        // 解决 <br>、</s>、&nbsp; 等被拆散发送或无换行导致退化检测失效的 bug
+                        // HTML token repeat detection across deltas
+                        // Handles cases where tokens like <br>, </s>, &nbsp; are split across frames.
                         tagBuffer += event.delta;
                         const tagMatches = [...tagBuffer.matchAll(new RegExp(HTML_TOKEN_RE.source, 'gi'))];
                         if (tagMatches.length > 0) {
@@ -196,7 +191,7 @@ async function sendCursorRequestInner(
                                 if (token === lastDelta) {
                                     repeatCount++;
                                     if (repeatCount >= REPEAT_THRESHOLD) {
-                                        console.warn(`[Cursor] ⚠️ 检测到 HTML token 重复: "${token}" 已连续重复 ${repeatCount} 次，中止流`);
+                                        console.warn(`[Cursor] ⚠️ Detected repeated HTML token: "${token}" repeated ${repeatCount} times, aborting stream`);
                                         htmlRepeatAborted = true;
                                         reader.cancel();
                                         break;
@@ -208,30 +203,30 @@ async function sendCursorRequestInner(
                             }
                             if (htmlRepeatAborted) break;
                         } else if (tagBuffer.length > 20) {
-                            // 超过 20 字符还没有完整 HTML token，不是 HTML 序列，清空避免内存累积
+                            // If no full HTML token after 20 chars, clear to avoid growth
                             tagBuffer = '';
                         }
                     }
 
                     onChunk(event);
                 } catch {
-                    // 非 JSON 数据，忽略
+                    // Ignore non-JSON data
                 }
             }
 
             if (degenerateAborted || htmlRepeatAborted) break;
         }
 
-        // ★ 退化循环中止后，抛出特殊错误让外层 sendCursorRequest 不再重试
+        // Degenerate-loop abort: throw sentinel error to skip outer retries
         if (degenerateAborted) {
             throw new Error('DEGENERATE_LOOP_ABORTED');
         }
-        // ★ HTML token 重复中止后，抛出普通错误让外层 sendCursorRequest 走正常重试
+        // HTML token repetition abort: throw normal error so outer layer retries
         if (htmlRepeatAborted) {
             throw new Error('HTML_REPEAT_ABORTED');
         }
 
-        // 处理剩余 buffer
+        // Handle remaining buffered data
         if (buffer.startsWith('data: ')) {
             const data = buffer.slice(6).trim();
             if (data) {
@@ -247,7 +242,7 @@ async function sendCursorRequestInner(
 }
 
 /**
- * 发送非流式请求，收集完整响应及 usage 信息
+ * Send a non-streaming request and collect full response plus usage
  */
 export async function sendCursorRequestFull(req: CursorChatRequest): Promise<{ text: string; usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number } }> {
     let fullText = '';

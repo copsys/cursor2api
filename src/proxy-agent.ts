@@ -1,12 +1,9 @@
 /**
- * proxy-agent.ts - 代理支持模块
+ * proxy-agent.ts - proxy support
  *
- * 职责：
- * 根据 config.proxy 或 PROXY 环境变量创建 undici ProxyAgent，
- * 让 Node.js 原生 fetch() 能通过 HTTP/HTTPS 代理发送请求。
- *
- * Node.js 内置的 fetch (基于 undici) 不会自动读取 HTTP_PROXY / HTTPS_PROXY
- * 环境变量，必须显式传入 dispatcher (ProxyAgent) 才能走代理。
+ * Creates an undici ProxyAgent from config.proxy or PROXY env so Node fetch()
+ * can send requests through HTTP/HTTPS proxies. Native fetch does not read
+ * HTTP_PROXY / HTTPS_PROXY automatically; dispatcher must be passed explicitly.
  */
 
 import { ProxyAgent } from 'undici';
@@ -14,10 +11,11 @@ import { getConfig } from './config.js';
 
 let cachedAgent: ProxyAgent | undefined;
 let cachedVisionAgent: ProxyAgent | undefined;
+let cachedProxyUrl: string | undefined;
+let cachedVisionProxyUrl: string | undefined;
 
 /**
- * 获取代理 dispatcher（如果配置了 proxy）
- * 返回 undefined 表示不使用代理（直连）
+ * Get proxy dispatcher (if configured). Undefined = direct connection.
  */
 export function getProxyDispatcher(): ProxyAgent | undefined {
     const config = getConfig();
@@ -25,8 +23,9 @@ export function getProxyDispatcher(): ProxyAgent | undefined {
 
     if (!proxyUrl) return undefined;
 
-    if (!cachedAgent) {
-        console.log(`[Proxy] 使用全局代理: ${proxyUrl}`);
+    if (!cachedAgent || cachedProxyUrl !== proxyUrl) {
+        console.log(`[Proxy] Using global proxy: ${proxyUrl}`);
+        cachedProxyUrl = proxyUrl;
         cachedAgent = new ProxyAgent(proxyUrl);
     }
 
@@ -34,8 +33,8 @@ export function getProxyDispatcher(): ProxyAgent | undefined {
 }
 
 /**
- * 构建 fetch 的额外选项（包含 dispatcher）
- * 用法: fetch(url, { ...options, ...getProxyFetchOptions() })
+ * Build extra fetch options (includes dispatcher).
+ * Usage: fetch(url, { ...options, ...getProxyFetchOptions() })
  */
 export function getProxyFetchOptions(): Record<string, unknown> {
     const dispatcher = getProxyDispatcher();
@@ -43,21 +42,22 @@ export function getProxyFetchOptions(): Record<string, unknown> {
 }
 
 /**
- * ★ Vision 独立代理：优先使用 vision.proxy，否则回退到全局 proxy
- * Cursor API 国内可直连不需要代理，但图片分析 API 可能需要
+ * Vision-specific proxy: prefer vision.proxy, otherwise fall back to global proxy.
+ * Cursor API itself typically needs no proxy, but vision APIs might.
  */
 export function getVisionProxyFetchOptions(): Record<string, unknown> {
     const config = getConfig();
     const visionProxy = config.vision?.proxy;
 
     if (visionProxy) {
-        if (!cachedVisionAgent) {
-            console.log(`[Proxy] Vision 独立代理: ${visionProxy}`);
+        if (!cachedVisionAgent || cachedVisionProxyUrl !== visionProxy) {
+            console.log(`[Proxy] Vision proxy: ${visionProxy}`);
+            cachedVisionProxyUrl = visionProxy;
             cachedVisionAgent = new ProxyAgent(visionProxy);
         }
         return { dispatcher: cachedVisionAgent };
     }
 
-    // 回退到全局代理
+    // Fallback to global proxy
     return getProxyFetchOptions();
 }
